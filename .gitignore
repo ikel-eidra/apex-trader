@@ -1,7 +1,7 @@
 # APEX TRADER - Git Ignore
 
-# Environment variables (NEVER commit API keys!)
-.env
+# Environment variables
+# .env - TEMPORARILY ALLOWING FOR RAILWAY DEPLOYMENT
 
 # Python
 __pycache__/
