@@ -1,6 +1,6 @@
 """
 APEX TRADER - Trading Engine
-Executes trades with 0.5% profit target and 0.3% stop loss
+Executes trades with Dynamic Risk Management (ATR-based)
 Engineer: Mane 🔥💙
 """
 
@@ -11,6 +11,7 @@ from binance.client import Client
 from binance.exceptions import BinanceAPIException
 import config
 from database import Database
+from indicators import Indicators
 
 class Trader:
     def __init__(self, api_key: str = None, api_secret: str = None, testnet: bool = True):
@@ -32,6 +33,12 @@ class Trader:
         self.db = Database()
         self.current_position = None
         self.entry_time = None
+        
+        # Dynamic Risk State
+        self.initial_stop_loss = 0.0
+        self.initial_take_profit = 0.0
+        self.trailing_stop_active = False
+        self.highest_price = 0.0
     
     def get_account_balance(self, asset: str = 'USDT') -> float:
         """Get account balance for an asset"""
@@ -136,12 +143,43 @@ class Trader:
             print(f"❌ Error getting price: {e}")
             return None
     
+    def calculate_atr_targets(self, entry_price: float, price_history: list) -> tuple:
+        """Calculate dynamic SL/TP based on ATR"""
+        if not price_history or len(price_history) < 20:
+            # Fallback to fixed percentages if no history
+            tp = entry_price * (1 + config.TAKE_PROFIT_PERCENT / 100)
+            sl = entry_price * (1 - config.STOP_LOSS_PERCENT / 100)
+            return tp, sl
+            
+        # Calculate ATR (simplified using highs/lows approximation from closes if needed)
+        # For better accuracy, we'd need real high/low data, but we'll use volatility estimation
+        volatility = Indicators.calculate_volatility(price_history) / 100 # as decimal
+        
+        # ATR approximation: Price * Volatility
+        atr = entry_price * volatility
+        
+        # Dynamic Targets
+        # Stop Loss: 2x ATR
+        # Take Profit: 3x ATR (1.5 Risk/Reward)
+        
+        sl_price = entry_price - (2 * atr)
+        tp_price = entry_price + (3 * atr)
+        
+        # Safety bounds (don't let SL be too tight or too loose)
+        min_sl = entry_price * 0.98 # Max 2% loss
+        max_sl = entry_price * 0.997 # Min 0.3% risk
+        
+        sl_price = max(min_sl, min(sl_price, max_sl))
+        
+        return tp_price, sl_price
+
     def enter_trade(self, opportunity: Dict) -> bool:
         """Enter a trade based on opportunity"""
         symbol = opportunity['symbol']
         current_price = opportunity['current_price']
         score = opportunity['final_score']
         scores_breakdown = opportunity['scores']
+        price_history = opportunity.get('price_history', [])
         
         print(f"\n🎯 ENTERING TRADE:")
         print(f"   Symbol: {symbol}")
@@ -177,6 +215,21 @@ class Trader:
         print(f"   Price: ${fill_price:.4f}")
         print(f"   Total: ${fill_price * fill_quantity:.2f}")
         
+        # Calculate Dynamic Targets
+        tp_price, sl_price = self.calculate_atr_targets(fill_price, price_history)
+        
+        self.initial_take_profit = tp_price
+        self.initial_stop_loss = sl_price
+        self.highest_price = fill_price
+        self.trailing_stop_active = False
+        
+        tp_pct = ((tp_price - fill_price) / fill_price) * 100
+        sl_pct = ((fill_price - sl_price) / fill_price) * 100
+        
+        print(f"📊 DYNAMIC TARGETS (ATR):")
+        print(f"   Take Profit: ${tp_price:.4f} (+{tp_pct:.2f}%)")
+        print(f"   Stop Loss: ${sl_price:.4f} (-{sl_pct:.2f}%)")
+        
         # Log trade in database
         trade_id = self.db.log_trade_entry(
             symbol=symbol,
@@ -192,17 +245,11 @@ class Trader:
             'symbol': symbol,
             'entry_price': fill_price,
             'quantity': fill_quantity,
-            'score': score
+            'score': score,
+            'tp_price': tp_price,
+            'sl_price': sl_price
         }
         self.entry_time = datetime.now()
-        
-        # Calculate targets
-        take_profit_price = fill_price * (1 + config.TAKE_PROFIT_PERCENT / 100)
-        stop_loss_price = fill_price * (1 - config.STOP_LOSS_PERCENT / 100)
-        
-        print(f"📊 TARGETS:")
-        print(f"   Take Profit: ${take_profit_price:.4f} (+{config.TAKE_PROFIT_PERCENT}%)")
-        print(f"   Stop Loss: ${stop_loss_price:.4f} (-{config.STOP_LOSS_PERCENT}%)")
         
         return True
     
@@ -221,13 +268,26 @@ class Trader:
         if not current_price:
             return True  # Continue monitoring
         
+        # Update highest price for trailing stop
+        if current_price > self.highest_price:
+            self.highest_price = current_price
+        
         # Calculate current P&L
         profit_percent = ((current_price - entry_price) / entry_price) * 100
         profit_usd = (current_price - entry_price) * quantity
         
-        # Calculate targets
-        take_profit_price = entry_price * (1 + config.TAKE_PROFIT_PERCENT / 100)
-        stop_loss_price = entry_price * (1 - config.STOP_LOSS_PERCENT / 100)
+        # Dynamic Risk Logic
+        take_profit_price = self.initial_take_profit
+        stop_loss_price = self.initial_stop_loss
+        
+        # Activate Trailing Stop if profit > 1%
+        if profit_percent > 1.0:
+            self.trailing_stop_active = True
+            # Trail by 0.5% from highest price
+            new_stop = self.highest_price * 0.995
+            if new_stop > stop_loss_price:
+                stop_loss_price = new_stop
+                # print(f"🔄 Trailing Stop Updated: ${stop_loss_price:.4f}")
         
         # Check time limit
         time_in_trade = (datetime.now() - self.entry_time).total_seconds()
@@ -239,13 +299,13 @@ class Trader:
         
         if current_price >= take_profit_price:
             should_exit = True
-            exit_reason = "TAKE_PROFIT"
-            print(f"✅ TAKE PROFIT HIT! (+{config.TAKE_PROFIT_PERCENT}%)")
+            exit_reason = "TAKE_PROFIT_DYNAMIC"
+            print(f"✅ TAKE PROFIT HIT! (+{profit_percent:.2f}%)")
         
         elif current_price <= stop_loss_price:
             should_exit = True
-            exit_reason = "STOP_LOSS"
-            print(f"❌ STOP LOSS HIT! (-{config.STOP_LOSS_PERCENT}%)")
+            exit_reason = "STOP_LOSS_DYNAMIC" if not self.trailing_stop_active else "TRAILING_STOP"
+            print(f"❌ STOP LOSS HIT! ({profit_percent:.2f}%)")
         
         elif time_in_trade >= max_duration:
             should_exit = True
@@ -257,7 +317,7 @@ class Trader:
             return self.exit_trade(exit_reason)
         
         # Print status
-        print(f"📊 Position: {symbol} | Entry: ${entry_price:.4f} | Current: ${current_price:.4f} | P&L: {profit_percent:+.2f}% (${profit_usd:+.2f})", end='\r')
+        print(f"📊 {symbol} | Entry: ${entry_price:.4f} | Curr: ${current_price:.4f} | P&L: {profit_percent:+.2f}% | SL: ${stop_loss_price:.4f}", end='\r')
         
         return True  # Continue monitoring
     
@@ -302,6 +362,8 @@ class Trader:
         # Clear position
         self.current_position = None
         self.entry_time = None
+        self.highest_price = 0.0
+        self.trailing_stop_active = False
         
         return True
     

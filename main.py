@@ -1,6 +1,6 @@
 """
 APEX TRADER - Main Bot
-Coordinates scanner and trader for automated trading
+Coordinates scanner and trader for automated trading (Async + API)
 Engineer: Mane 🔥💙
 For: Ikel
 """
@@ -8,16 +8,19 @@ For: Ikel
 import time
 import signal
 import sys
+import asyncio
+import uvicorn
 from datetime import datetime
-from scanner import CoinScanner
+from scanner import AsyncCoinScanner
 from trader import Trader
 from database import Database
 import config
+import web_api
 
 class ApexTrader:
     def __init__(self):
         """Initialize APEX TRADER bot"""
-        self.scanner = CoinScanner()
+        self.scanner = AsyncCoinScanner()
         self.trader = Trader()
         self.db = Database()
         self.running = False
@@ -28,13 +31,26 @@ class ApexTrader:
             'start_balance': 0.0
         }
         
+        # Share bot instance with API
+        web_api.bot_instance = self
+        
         # Setup signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self.shutdown)
-        signal.signal(signal.SIGTERM, self.shutdown)
+        # Note: In async, we handle signals differently, but keeping this for safety
+        try:
+            signal.signal(signal.SIGINT, self.shutdown_handler)
+            signal.signal(signal.SIGTERM, self.shutdown_handler)
+        except ValueError:
+            # Signal handlers only work in main thread
+            pass
     
-    def shutdown(self, signum, frame):
-        """Graceful shutdown"""
-        print("\n\n🛑 Shutting down APEX TRADER...")
+    def shutdown_handler(self, signum, frame):
+        """Handle shutdown signal"""
+        print("\n\n🛑 Received shutdown signal...")
+        self.running = False
+    
+    async def shutdown(self):
+        """Graceful shutdown coroutine"""
+        print("\n🛑 Shutting down APEX TRADER...")
         self.running = False
         
         # Close any open positions
@@ -43,7 +59,6 @@ class ApexTrader:
             self.trader.exit_trade("SHUTDOWN")
         
         print("✅ Shutdown complete")
-        sys.exit(0)
     
     def check_daily_limits(self) -> bool:
         """Check if daily trading limits are reached"""
@@ -63,8 +78,8 @@ class ApexTrader:
         if self.stats['consecutive_losses'] >= config.MAX_CONSECUTIVE_LOSSES:
             print(f"⚠️ Max consecutive losses reached ({config.MAX_CONSECUTIVE_LOSSES})")
             print(f"⏸️ Pausing for {config.PAUSE_AFTER_LOSSES}s...")
-            time.sleep(config.PAUSE_AFTER_LOSSES)
-            self.stats['consecutive_losses'] = 0
+            # In async loop we will sleep, here we just return False to skip this iteration
+            return False
         
         return True
     
@@ -109,10 +124,10 @@ class ApexTrader:
         print(f"   Avg Profit: {all_time_stats['avg_profit_percent']:+.2f}%")
         print("="*60)
     
-    def run(self):
-        """Main bot loop"""
+    async def trading_loop(self):
+        """Main async trading loop"""
         print("\n" + "="*60)
-        print("🔥 APEX TRADER STARTING 🔥")
+        print("🔥 APEX TRADER STARTING (ASYNC) 🔥")
         print("="*60)
         
         # Validate configuration
@@ -137,20 +152,25 @@ class ApexTrader:
                 # If we have an open position, monitor it
                 if self.trader.has_open_position():
                     self.trader.monitor_position()
-                    time.sleep(1)  # Check every second
+                    await asyncio.sleep(1)  # Check every second
                     continue
                 
                 # Check if we can trade
                 if not self.check_daily_limits():
-                    print("⏸️ Daily limits reached. Waiting until tomorrow...")
-                    time.sleep(3600)  # Wait 1 hour
+                    if self.stats['consecutive_losses'] >= config.MAX_CONSECUTIVE_LOSSES:
+                         await asyncio.sleep(config.PAUSE_AFTER_LOSSES)
+                         self.stats['consecutive_losses'] = 0
+                    else:
+                        print("⏸️ Daily limits reached. Waiting until tomorrow...")
+                        await asyncio.sleep(3600)  # Wait 1 hour
                     continue
                 
                 # Scan for opportunities
                 scan_counter += 1
                 print(f"\n🔍 Scan #{scan_counter} - {datetime.now().strftime('%H:%M:%S')}")
                 
-                opportunity = self.scanner.get_best_opportunity()
+                # Async scan
+                opportunity = await self.scanner.get_best_opportunity()
                 
                 if opportunity:
                     print(f"\n✨ OPPORTUNITY FOUND!")
@@ -158,7 +178,7 @@ class ApexTrader:
                     print(f"   Score: {opportunity['final_score']:.2f}/10")
                     print(f"   Price: ${opportunity['current_price']:.4f}")
                     
-                    # Enter trade
+                    # Enter trade (Sync call, but fast)
                     success = self.trader.enter_trade(opportunity)
                     
                     if success:
@@ -174,23 +194,50 @@ class ApexTrader:
                 
                 # Wait before next scan
                 print(f"\n⏳ Waiting {config.SCAN_INTERVAL}s until next scan...")
-                time.sleep(config.SCAN_INTERVAL)
+                await asyncio.sleep(config.SCAN_INTERVAL)
             
-            except KeyboardInterrupt:
-                self.shutdown(None, None)
+            except asyncio.CancelledError:
+                print("\n🛑 Trading loop cancelled")
+                break
             
             except Exception as e:
                 print(f"\n❌ Error in main loop: {e}")
                 print("⏳ Waiting 60s before retry...")
-                time.sleep(60)
+                await asyncio.sleep(60)
         
-        print("\n✅ APEX TRADER stopped")
+        await self.shutdown()
 
-def main():
+async def main():
     """Entry point"""
     bot = ApexTrader()
-    bot.run()
+    
+    # Create tasks for bot and API
+    bot_task = asyncio.create_task(bot.trading_loop())
+    
+    # Configure API server
+    config_uvicorn = uvicorn.Config(
+        web_api.app, 
+        host=config.API_HOST, 
+        port=config.API_PORT, 
+        log_level="info"
+    )
+    server = uvicorn.Server(config_uvicorn)
+    api_task = asyncio.create_task(server.serve())
+    
+    print(f"🚀 API Server starting on {config.API_HOST}:{config.API_PORT}")
+    
+    try:
+        # Run both tasks
+        await asyncio.gather(bot_task, api_task)
+    except asyncio.CancelledError:
+        print("\n🛑 Main task cancelled")
+    finally:
+        bot.running = False
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Goodbye!")
+
 

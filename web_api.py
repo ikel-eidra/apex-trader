@@ -11,6 +11,10 @@ import uvicorn
 import os
 from database import Database
 import config
+from resident_ai import ResidentAI
+from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 app = FastAPI(title="APEX TRADER API", version="1.0.0")
 
@@ -23,8 +27,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files (Dashboard)
+# Check if dist exists
+if os.path.exists("dashboard/dist"):
+    app.mount("/assets", StaticFiles(directory="dashboard/dist/assets"), name="assets")
+
+
 # Initialize database
 db = Database()
+
+# Initialize Resident AI
+brain = ResidentAI()
+
+class ChatRequest(BaseModel):
+    message: str
+
+@app.post("/api/chat")
+async def chat_with_ai(request: ChatRequest):
+    """Chat with the Resident AI"""
+    # Gather context for the AI
+    context = {
+        "status": await status(),
+        "recent_trades": db.get_recent_trades(limit=5)
+    }
+    
+    response = brain.chat(request.message, context)
+    return {"response": response}
+
 
 @app.get("/")
 async def root():
@@ -112,7 +141,48 @@ async def get_config():
         }
     }
 
+# Global bot instance (injected by main.py)
+bot_instance = None
+
+@app.post("/control/start")
+async def start_bot():
+    """Start the trading bot"""
+    if not bot_instance:
+        return JSONResponse(status_code=503, content={"error": "Bot instance not initialized"})
+    
+    if bot_instance.running:
+        return {"status": "already_running", "message": "Bot is already running"}
+    
+    # In async mode, we can't easily restart the loop if it exited, 
+    # but we can set the flag if the loop is checking it.
+    # However, if the loop finished, we'd need to restart the task.
+    # For now, we assume the loop is running but paused or we just set the flag.
+    # A better approach for a robust system is to have a 'paused' state.
+    
+    bot_instance.running = True
+    return {"status": "started", "message": "Bot started"}
+
+@app.post("/control/stop")
+async def stop_bot():
+    """Stop the trading bot"""
+    if not bot_instance:
+        return JSONResponse(status_code=503, content={"error": "Bot instance not initialized"})
+    
+    if not bot_instance.running:
+        return {"status": "already_stopped", "message": "Bot is already stopped"}
+    
+    bot_instance.running = False
+    return {"status": "stopped", "message": "Bot stopped"}
+
+@app.get("/{full_path:path}")
+async def serve_react_app(full_path: str):
+    """Serve React App for any other route"""
+    if os.path.exists("dashboard/dist/index.html"):
+        return FileResponse("dashboard/dist/index.html")
+    return {"error": "Dashboard not built"}
+
 if __name__ == "__main__":
+    # This block is for standalone API testing only
     port = int(os.environ.get("PORT", config.API_PORT))
     print(f"🚀 Starting APEX TRADER API on port {port}...")
     uvicorn.run(app, host=config.API_HOST, port=port)

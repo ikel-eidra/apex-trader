@@ -126,72 +126,171 @@ class Indicators:
         return momentum
     
     @staticmethod
-    def get_technical_score(prices: List[float]) -> Dict:
+    def calculate_stoch_rsi(prices: List[float], period: int = 14, k_period: int = 3, d_period: int = 3) -> Dict:
+        """Calculate Stochastic RSI"""
+        if len(prices) < period + 1:
+            return {'k': 50, 'd': 50}
+        
+        rsi_values = []
+        # Calculate RSI for the last (period + k + d) points to get enough data for smoothing
+        lookback = period + k_period + d_period + 10
+        if len(prices) < lookback:
+            lookback = len(prices)
+            
+        # We need a series of RSI values
+        for i in range(lookback - period):
+            slice_prices = prices[-(lookback-i):]
+            if len(slice_prices) > period:
+                rsi_values.append(Indicators.calculate_rsi(slice_prices, period))
+        
+        if not rsi_values:
+            return {'k': 50, 'd': 50}
+            
+        rsi_series = pd.Series(rsi_values)
+        
+        # Calculate Stoch RSI
+        min_rsi = rsi_series.rolling(window=period).min()
+        max_rsi = rsi_series.rolling(window=period).max()
+        
+        stoch = ((rsi_series - min_rsi) / (max_rsi - min_rsi)) * 100
+        
+        # Smooth K and D
+        k = stoch.rolling(window=k_period).mean()
+        d = k.rolling(window=d_period).mean()
+        
+        return {
+            'k': k.iloc[-1] if not k.empty and not pd.isna(k.iloc[-1]) else 50,
+            'd': d.iloc[-1] if not d.empty and not pd.isna(d.iloc[-1]) else 50
+        }
+
+    @staticmethod
+    def calculate_ema(prices: List[float], period: int) -> float:
+        """Calculate Exponential Moving Average"""
+        if len(prices) < period:
+            return prices[-1] if prices else 0
+        
+        return float(pd.Series(prices).ewm(span=period, adjust=False).mean().iloc[-1])
+
+    @staticmethod
+    def calculate_atr(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
+        """Calculate Average True Range (ATR)"""
+        if len(closes) < period + 1:
+            return 0
+            
+        highs = np.array(highs)
+        lows = np.array(lows)
+        closes = np.array(closes)
+        
+        # TR = Max(High-Low, Abs(High-PrevClose), Abs(Low-PrevClose))
+        tr1 = highs[1:] - lows[1:]
+        tr2 = np.abs(highs[1:] - closes[:-1])
+        tr3 = np.abs(lows[1:] - closes[:-1])
+        
+        tr = np.maximum(tr1, np.maximum(tr2, tr3))
+        
+        # ATR = Moving Average of TR
+        atr = pd.Series(tr).rolling(window=period).mean().iloc[-1]
+        
+        return float(atr) if not pd.isna(atr) else 0
+
+    @staticmethod
+    def get_technical_score(prices: List[float], highs: List[float] = None, lows: List[float] = None) -> Dict:
         """Calculate overall technical score based on all indicators"""
-        if len(prices) < 2:
+        if len(prices) < 50:
             return {'score': 5, 'signals': {}}
         
         # Calculate all indicators
         rsi = Indicators.calculate_rsi(prices)
+        stoch = Indicators.calculate_stoch_rsi(prices)
         macd = Indicators.calculate_macd(prices)
         bb = Indicators.calculate_bollinger_bands(prices)
+        ema_50 = Indicators.calculate_ema(prices, 50)
+        ema_200 = Indicators.calculate_ema(prices, 200)
+        
+        # Trend detection
+        trend = "NEUTRAL"
+        if ema_50 > ema_200:
+            trend = "BULLISH"
+        elif ema_50 < ema_200:
+            trend = "BEARISH"
+            
+        current_price = prices[-1]
         
         signals = {
             'rsi': rsi,
+            'stoch_k': stoch['k'],
+            'stoch_d': stoch['d'],
             'macd_bullish': macd['crossover'],
             'macd_histogram': macd['histogram'],
-            'bb_position': bb['position']
+            'bb_position': bb['position'],
+            'trend': trend,
+            'above_ema200': current_price > ema_200
         }
         
         # Score each indicator (0-10)
-        rsi_score = 0
-        if config.RSI_OVERSOLD < rsi < config.RSI_OVERBOUGHT:
-            rsi_score = 10  # Healthy range
-        elif rsi < config.RSI_OVERSOLD:
-            rsi_score = 8  # Oversold (buy signal)
-        elif rsi > config.RSI_OVERBOUGHT:
-            rsi_score = 3  # Overbought (avoid)
         
-        macd_score = 0
-        if macd['crossover']:
-            macd_score = 10  # Strong buy signal
-        elif macd['histogram'] > 0:
-            macd_score = 7  # Bullish
-        elif macd['histogram'] < 0:
-            macd_score = 3  # Bearish
+        # 1. RSI Score (Reversal logic)
+        rsi_score = 5
+        if rsi < 30: rsi_score = 9      # Oversold -> Buy
+        elif rsi < 40: rsi_score = 7    # Weak -> Buy
+        elif rsi > 70: rsi_score = 2    # Overbought -> Sell/Avoid
+        elif rsi > 60: rsi_score = 4    # Strong -> Caution
         
-        bb_score = 0
-        if bb['position'] < 0.3:
-            bb_score = 9  # Near lower band (buy signal)
-        elif bb['position'] < 0.5:
-            bb_score = 7  # Below middle
-        elif bb['position'] < 0.7:
-            bb_score = 5  # Above middle
-        else:
-            bb_score = 2  # Near upper band (overbought)
+        # 2. Stochastic RSI Score
+        stoch_score = 5
+        if stoch['k'] < 20 and stoch['k'] > stoch['d']: stoch_score = 10  # Bullish crossover in oversold
+        elif stoch['k'] < 20: stoch_score = 8                             # Oversold
+        elif stoch['k'] > 80: stoch_score = 2                             # Overbought
         
-        # Average score
-        total_score = (rsi_score + macd_score + bb_score) / 3
+        # 3. MACD Score
+        macd_score = 5
+        if macd['crossover']: macd_score = 10        # Bullish crossover
+        elif macd['histogram'] > 0: macd_score = 7   # Bullish momentum
+        elif macd['histogram'] < 0: macd_score = 3   # Bearish momentum
+        
+        # 4. Bollinger Bands Score
+        bb_score = 5
+        if bb['position'] < 0.1: bb_score = 10       # Below lower band (Mean reversion)
+        elif bb['position'] < 0.3: bb_score = 8      # Near lower band
+        elif bb['position'] > 0.9: bb_score = 2      # Above upper band
+        
+        # 5. Trend Score
+        trend_score = 5
+        if trend == "BULLISH" and current_price > ema_50: trend_score = 8
+        elif trend == "BEARISH": trend_score = 3
+        
+        # Weighted Average Score
+        # RSI: 20%, Stoch: 20%, MACD: 25%, BB: 15%, Trend: 20%
+        total_score = (
+            (rsi_score * 0.20) +
+            (stoch_score * 0.20) +
+            (macd_score * 0.25) +
+            (bb_score * 0.15) +
+            (trend_score * 0.20)
+        )
         
         return {
             'score': total_score,
             'signals': signals,
             'breakdown': {
                 'rsi_score': rsi_score,
+                'stoch_score': stoch_score,
                 'macd_score': macd_score,
-                'bb_score': bb_score
+                'bb_score': bb_score,
+                'trend_score': trend_score
             }
         }
 
 if __name__ == "__main__":
     # Test indicators
-    test_prices = [100, 101, 102, 101, 103, 105, 104, 106, 108, 107, 109, 111, 110, 112, 115]
+    test_prices = [100 + i + (i%5)*2 for i in range(100)] # Generate dummy data
+    test_highs = [p * 1.01 for p in test_prices]
+    test_lows = [p * 0.99 for p in test_prices]
     
-    print("Testing Indicators:")
+    print("🔥 Testing Advanced Indicators...")
     print(f"RSI: {Indicators.calculate_rsi(test_prices):.2f}")
-    print(f"MACD: {Indicators.calculate_macd(test_prices)}")
-    print(f"Bollinger Bands: {Indicators.calculate_bollinger_bands(test_prices)}")
-    print(f"Volatility: {Indicators.calculate_volatility(test_prices):.2f}%")
-    print(f"Momentum: {Indicators.calculate_momentum(test_prices)}")
-    print(f"Technical Score: {Indicators.get_technical_score(test_prices)}")
+    print(f"Stoch RSI: {Indicators.calculate_stoch_rsi(test_prices)}")
+    print(f"EMA 50: {Indicators.calculate_ema(test_prices, 50):.2f}")
+    print(f"ATR: {Indicators.calculate_atr(test_highs, test_lows, test_prices):.2f}")
+    print(f"Technical Score: {Indicators.get_technical_score(test_prices)['score']:.2f}/10")
 
