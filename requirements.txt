@@ -2,15 +2,10 @@
 # Engineer: Mane 🔥💙
 
 # Binance API
-python-binance
-ta-lib
-pandas
-numpy
-requests
-uvicorn
-fastapi
-pydantic
-groqdas>=2.2.0
+python-binance==1.0.19
+
+# Data Processing
+pandas>=2.2.0
 numpy>=1.26.0
 
 # Technical Analysis
@@ -35,3 +30,5 @@ websockets==12.0
 # Logging
 colorlog==6.8.0
 
+# AI / Resident Brain
+groq>=0.4.0
