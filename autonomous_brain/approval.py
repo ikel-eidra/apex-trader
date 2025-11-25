@@ -33,6 +33,16 @@ class ApprovalSystem:
     async def initialize(self):
         """Initialize Telegram client"""
         self.client = TelegramClient('brain_approval_session', self.api_id, self.api_hash)
+        
+        # Connect without starting interactive login
+        await self.client.connect()
+        
+        if not await self.client.is_user_authorized():
+            print("⚠️ Approval System: Telegram session not authorized. Interactive login required locally.")
+            print("⚠️ Skipping Approval System Telegram connection to prevent crash.")
+            await self.client.disconnect()
+            return
+
         await self.client.start()
         print("✅ Telegram client connected")
     
