@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HEIST ENGINE - Autonomous Trading Brain
+HE IST ENGINE - Autonomous Trading Brain
 ========================================
 Monitors Telegram/Discord for new token signals
 Executes trades with autonomous approval system
@@ -14,13 +14,13 @@ import asyncio
 import os
 import sys
 import signal
+import logging
 from datetime import datetime
 from pathlib import Path
 
 # Add project root to path so autonomous_brain can be imported
 sys.path.insert(0, str(Path(__file__).parent))
 
-from autonomous_brain.logger import setup_logger
 from autonomous_brain.monitor import SignalMonitor
 from autonomous_brain.trainer import TrainingScheduler
 from autonomous_brain.atlas_memory import ATLASMemory
@@ -29,12 +29,20 @@ import web_api
 import config
 
 
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(name)-12s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+
 class HeistEngine:
     """ATLAS - The Autonomous Trading Brain"""
     
     def __init__(self):
         """Initialize Heist Engine"""
-        self.logger = setup_logger("HeistEngine")
+        self.logger = logging.getLogger("HeistEngine")
         self.running = False
         
         # Core components
