@@ -21,4 +21,4 @@ RUN mkdir -p data
 EXPOSE 10000
 
 # Run the bot
-CMD ["python", "main.py"]
+CMD ["python", "heist_engine.py"]
