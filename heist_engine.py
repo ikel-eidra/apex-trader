@@ -17,8 +17,8 @@ import signal
 from datetime import datetime
 from pathlib import Path
 
-# Add autonomous_brain to path
-sys.path.insert(0, str(Path(__file__).parent / "autonomous_brain"))
+# Add project root to path so autonomous_brain can be imported
+sys.path.insert(0, str(Path(__file__).parent))
 
 from autonomous_brain.logger import setup_logger
 from autonomous_brain.monitor import SignalMonitor
