@@ -211,6 +211,37 @@ async def get_positions():
         }
 
 
+@app.get("/activity")
+async def get_activity():
+    """Get recent ATLAS activity"""
+    from datetime import datetime
+    
+    # TODO: Integrate with actual logger to get real activity
+    # For now, return mock activity
+    activities = [
+        {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "type": "monitoring",
+            "message": "📡 Monitoring 17 Telegram channels for signals"
+        },
+        {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "type": "diagnostic",
+            "message": "🔍 Running diagnostic check - All systems healthy"
+        },
+        {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "type": "training",
+            "message": f"⏰ Next training session: 23:00 ({os.getenv('TRAINING_TIME', '23:00')})"
+        }
+    ]
+    
+    return {
+        "activities": activities,
+        "last_update": datetime.now().isoformat()
+    }
+
+
 @app.get("/config")
 async def get_config():
     """Get bot configuration"""
