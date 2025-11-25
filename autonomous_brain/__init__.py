@@ -5,7 +5,7 @@ Autonomous Brain System for Heist Engine
 Self-diagnosing, self-healing AI with position sizing.
 """
 
-from .monitor import RailwayLogMonitor
+from .log_monitor import RailwayLogMonitor
 from .classifier import IssueClassifier, Severity, ApprovalLevel
 from .logger import ActionLogger, BrainAction
 from .github_manager import GitHubManager
