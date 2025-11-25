@@ -11,7 +11,7 @@ import asyncio
 from typing import Dict, Optional
 from datetime import datetime
 
-from .monitor import RailwayLogMonitor
+from .log_monitor import RailwayLogMonitor
 from .classifier import IssueClassifier, ApprovalLevel
 from .logger import ActionLogger, BrainAction
 from .github_manager import GitHubManager
