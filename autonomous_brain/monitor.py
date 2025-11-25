@@ -91,6 +91,15 @@ class SignalMonitor:
                 self.telegram_api_hash
             )
             
+            # Connect without starting interactive login
+            await self.telegram_client.connect()
+            
+            if not await self.telegram_client.is_user_authorized():
+                self.logger.warning("⚠️ Telegram session not authorized. Interactive login required locally.")
+                self.logger.warning("⚠️ Skipping Telegram monitoring to prevent crash.")
+                await self.telegram_client.disconnect()
+                return
+
             await self.telegram_client.start(phone=self.telegram_phone)
             self.logger.info("✅ Telegram connected!")
             
