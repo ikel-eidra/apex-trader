@@ -37,6 +37,16 @@ class SignalMonitor:
         self.discord_client = None
         self.signal_queue = []
         
+        # Configuration
+        self.telegram_api_id = os.getenv('TELEGRAM_API_ID')
+        self.telegram_api_hash = os.getenv('TELEGRAM_API_HASH')
+        self.telegram_phone = os.getenv('TELEGRAM_PHONE')
+        
+        # Channels to monitor (can be loaded from config/db)
+        self.telegram_channels = [
+            'call_channel_1', 'call_channel_2'  # Placeholders
+        ]
+        
     async def initialize(self):
         """Initialize monitor components"""
         # Just check credentials for now
