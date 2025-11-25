@@ -35,19 +35,25 @@ class SignalMonitor:
         self.running = False
         self.telegram_client = None
         self.discord_client = None
-        self.signal_callback = None
+        self.signal_queue = []
         
-        # Configuration
-        self.telegram_api_id = os.getenv('TELEGRAM_API_ID')
-        self.telegram_api_hash = os.getenv('TELEGRAM_API_HASH')
-        self.telegram_phone = os.getenv('TELEGRAM_PHONE')
-        
-        # Channels to monitor (can be loaded from config/db)
-        self.telegram_channels = [
-            'call_channel_1', 'call_channel_2'  # Placeholders
-        ]
-        
-    async def start(self, callback: Callable):
+    async def initialize(self):
+        """Initialize monitor components"""
+        # Just check credentials for now
+        if not self.telegram_api_id or not self.telegram_api_hash:
+            self.logger.warning("⚠️ Telegram credentials missing")
+        return True
+
+    async def get_signals(self) -> List[Dict]:
+        """Get collected signals and clear queue"""
+        if not self.signal_queue:
+            return []
+            
+        signals = self.signal_queue.copy()
+        self.signal_queue.clear()
+        return signals
+
+    async def start(self, callback: Callable = None):
         """Start monitoring"""
         self.signal_callback = callback
         self.running = True
@@ -131,6 +137,10 @@ class SignalMonitor:
                 
                 self.logger.info(f"🚨 SIGNAL DETECTED from {sender_name}: {signal_data['symbol']}")
                 
+                # Add to queue for polling
+                self.signal_queue.append(signal_data)
+                
+                # Also trigger callback if set
                 if self.signal_callback:
                     await self.signal_callback(signal_data)
                     
